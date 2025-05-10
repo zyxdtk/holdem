@@ -1,0 +1,681 @@
+<!DOCTYPE html>
+<html lang="zh">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>德州扑克小游戏</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap" rel="stylesheet">
+    <link href="styles.css" rel="stylesheet">
+</head>
+
+<body>
+    <div class="game-container">
+        <div id="message-box" class="message-box"></div>
+
+        <div class="player-area">
+            <h2 class="text-lg mb-2">AI 对手</h2>
+            <div>筹码: <span id="ai-chips">1000</span></div>
+            <div id="ai-cards" class="my-2">
+                <div class="card card-hidden">?</div>
+                <div class="card card-hidden">?</div>
+            </div>
+            <div id="ai-round-action" class="status-text"></div>
+            <div id="ai-hand-rank" class="text-sm h-auto min-h-[4rem] hand-rank-display"></div>
+        </div>
+
+        <div class="community-area">
+            <h2 class="text-lg mb-2">公共牌</h2>
+            <div id="community-cards" class="my-2 min-h-[5.5rem]">
+            </div>
+            <div class="text-xl">底池: <span id="pot-amount">0</span></div>
+        </div>
+
+        <div class="player-area">
+            <h2 class="text-lg mb-2">玩家</h2>
+            <div>筹码: <span id="player-chips">1000</span></div>
+            <div id="player-cards" class="my-2">
+            </div>
+            <div id="player-round-action" class="status-text"></div>
+            <div id="player-hand-rank" class="text-sm h-auto min-h-[4rem] hand-rank-display"></div>
+        </div>
+
+        <div id="info-area" class="info-area h-6">
+        </div>
+
+        <div id="action-area" class="action-area">
+            <button id="debug-toggle" class="action-button bg-gray-500">Debug模式</button>
+            <button id="fold-button" class="action-button btn-fold">弃牌 (Fold)</button>
+            <button id="check-call-button" class="action-button btn-check-call">过牌/跟注 (Check/Call)</button>
+            <button id="bet-raise-button" class="action-button btn-bet-raise">下注/加注 (Bet/Raise)</button>
+            <input type="number" id="bet-amount"
+                class="p-2 rounded border border-gray-400 text-black mx-2 w-24 text-center" value="20" min="10">
+            <button id="next-hand-button" class="action-button btn-next-hand" style="display: none;">下一局 (Next
+                Hand)</button>
+        </div>
+    </div>
+    <script type="module">
+        import { createDeck, shuffleDeck, dealCard, calculateWinProbability, evaluateHand, 
+            SUITS, RANKS, RANK_VALUES, HAND_RANK_NAMES } from './game-logic.js';
+
+        // --- 常量定义 ---
+        const SMALL_BLIND = 10;
+        const BIG_BLIND = 20;
+
+        // --- 游戏状态变量 ---
+        let deck = [];
+        let playerCards = [];
+        let aiCards = [];
+        let communityCards = [];
+        let playerChips = 1000;
+        let aiChips = 1000;
+        let pot = 0;
+        let currentBet = 0;
+        let playerBetInRound = 0;
+        let aiBetInRound = 0;
+        let gamePhase = '';
+        let playerTurn = true;
+        let dealerIsPlayer = true;
+        let playerFolded = false;
+        let aiFolded = false;
+        let lastRaiser = null; // 'player', 'ai', or null
+        let debugMode = false;
+
+        const debugToggle = document.getElementById('debug-toggle');
+
+        debugToggle.addEventListener('click', () => {
+            debugMode = !debugMode;
+            debugToggle.style.backgroundColor = debugMode ? 'red' : 'gray';
+            console.log(`Debug模式 ${debugMode ? '开启' : '关闭'}`);
+        });
+
+        function debugLog(message) {
+            if (debugMode) {
+                console.log(`[DEBUG] ${new Date().toLocaleTimeString()} - ${message}`);
+            }
+        }
+        // --- DOM 元素获取 ---
+        const playerCardsDiv = document.getElementById('player-cards');
+        const aiCardsDiv = document.getElementById('ai-cards');
+        const communityCardsDiv = document.getElementById('community-cards');
+        const playerChipsSpan = document.getElementById('player-chips');
+        const aiChipsSpan = document.getElementById('ai-chips');
+        const potAmountSpan = document.getElementById('pot-amount');
+        const infoAreaDiv = document.getElementById('info-area');
+        const foldButton = document.getElementById('fold-button');
+        const checkCallButton = document.getElementById('check-call-button');
+        const betRaiseButton = document.getElementById('bet-raise-button');
+        const betAmountInput = document.getElementById('bet-amount');
+        const nextHandButton = document.getElementById('next-hand-button');
+        const aiRoundActionDiv = document.getElementById('ai-round-action'); // AI 本轮动作显示
+        const playerRoundActionDiv = document.getElementById('player-round-action'); // 玩家本轮动作显示
+        const playerHandRankDiv = document.getElementById('player-hand-rank');
+        const aiHandRankDiv = document.getElementById('ai-hand-rank'); // AI 牌型显示 (用于摊牌)
+        const messageBox = document.getElementById('message-box');
+
+        // --- 核心功能函数 ---
+        function createCardElement(card, hidden = false) {
+            const cardDiv = document.createElement('div');
+            if (hidden) {
+                cardDiv.className = 'card card-hidden';
+                cardDiv.textContent = '?';
+            } else {
+                cardDiv.className = `card ${['♥', '♦'].includes(card.suit) ? 'red' : 'black'}`;
+                cardDiv.textContent = `${card.rank}${card.suit}`;
+            }
+            return cardDiv;
+        }
+
+        // 在updateUI函数中添加胜率显示
+        function updateUI() {
+            playerChipsSpan.textContent = playerChips;
+            aiChipsSpan.textContent = aiChips;
+            potAmountSpan.textContent = pot;
+
+            playerCardsDiv.innerHTML = '';
+            playerCards.forEach(card => playerCardsDiv.appendChild(createCardElement(card)));
+
+            aiCardsDiv.innerHTML = '';
+            const hideAiCards = gamePhase !== 'SHOWDOWN' && !aiFolded;
+            aiCards.forEach(card => aiCardsDiv.appendChild(createCardElement(card, hideAiCards)));
+
+            if (aiFolded) {
+                aiCardsDiv.innerHTML = '<span class="text-red-500 text-sm">已弃牌 (Folded)</span>';
+            }
+
+
+            communityCardsDiv.innerHTML = '';
+            communityCards.forEach(card => communityCardsDiv.appendChild(createCardElement(card)));
+
+            updateActionButtons();
+
+            if (communityCards.length >= 3 && !playerFolded && gamePhase !== 'SHOWDOWN') {
+                const playerHand = evaluateHand(playerCards.concat(communityCards));
+                //  playerHandRankDiv.textContent = `当前牌型: ${HAND_RANK_NAMES[playerHand.rank]}`;
+                const winProbability = calculateWinProbability(playerCards, communityCards, 10);
+                playerHandRankDiv.textContent = `当前牌型: ${HAND_RANK_NAMES[playerHand.rank]} 胜率: ${winProbability}`;
+            } else if (gamePhase !== 'SHOWDOWN') { // 清除非摊牌阶段的牌型显示
+                playerHandRankDiv.textContent = '';
+                aiHandRankDiv.textContent = '';
+            }
+            // AI 牌型在摊牌时由 showdown() 函数处理，其他时候 ai-hand-rank 清空
+            if (gamePhase !== 'SHOWDOWN') {
+                aiHandRankDiv.innerHTML = '';
+            }
+        }
+
+        function updateActionButtons() {
+            const nonActionablePhase = gamePhase === 'SHOWDOWN' || playerFolded || aiFolded;
+            const buttonsDisabled = nonActionablePhase || (!playerTurn && gamePhase !== '');
+
+            foldButton.disabled = buttonsDisabled;
+            checkCallButton.disabled = buttonsDisabled;
+            betRaiseButton.disabled = buttonsDisabled;
+            betAmountInput.disabled = buttonsDisabled;
+
+            [foldButton, checkCallButton, betRaiseButton, betAmountInput].forEach(el => {
+                el.style.opacity = buttonsDisabled ? 0.5 : 1;
+            });
+
+            if (!buttonsDisabled && playerTurn) { // 仅当轮到玩家且游戏可操作时，更新按钮文本和特定禁用逻辑
+                const amountToCall = currentBet - playerBetInRound;
+                if (amountToCall === 0) {
+                    checkCallButton.textContent = '过牌 (Check)';
+                    checkCallButton.disabled = false;
+                } else {
+                    checkCallButton.textContent = `跟注 ${amountToCall} (Call)`;
+                    checkCallButton.disabled = playerChips < amountToCall;
+                }
+                checkCallButton.style.opacity = checkCallButton.disabled ? 0.5 : 1;
+
+
+                const minBetOrRaiseBase = BIG_BLIND;
+                let minBetValue;
+                if (currentBet === 0) { // No bet yet, so it's a "Bet"
+                    betRaiseButton.textContent = '下注 (Bet)';
+                    minBetValue = minBetOrRaiseBase;
+                } else { // There is a current bet, so it's a "Raise"
+                    betRaiseButton.textContent = '加注 (Raise)';
+                    // Min raise is current bet + original bet size (or at least double the previous bet/raise)
+                    // Simplified: min raise amount is BIG_BLIND on top of currentBet
+                    minBetValue = currentBet + minBetOrRaiseBase;
+                }
+
+                betAmountInput.min = Math.max(minBetOrRaiseBase, currentBet + minBetOrRaiseBase - playerBetInRound); // 玩家实际需要再投入的最小额度
+                betAmountInput.min = Math.max(BIG_BLIND, currentBet > 0 ? currentBet + BIG_BLIND : BIG_BLIND);
+
+
+                if (parseInt(betAmountInput.value) < parseInt(betAmountInput.min)) {
+                    betAmountInput.value = betAmountInput.min;
+                }
+                betAmountInput.max = playerChips + playerBetInRound; // 总下注额不能超过自己剩余的钱+已下注的
+
+                const requiredTotalBetForMinAction = (currentBet === 0) ? parseInt(betAmountInput.min) : currentBet + parseInt(betAmountInput.min) - playerBetInRound;
+
+
+                betRaiseButton.disabled = playerChips < (parseInt(betAmountInput.min) - playerBetInRound) || playerChips === 0;
+                if (currentBet > 0) { // Raising
+                    betRaiseButton.disabled = playerChips < ((currentBet + BIG_BLIND) - playerBetInRound) || playerChips === 0;
+                    betAmountInput.min = currentBet + BIG_BLIND;
+                } else { // Betting
+                    betRaiseButton.disabled = playerChips < BIG_BLIND || playerChips === 0;
+                    betAmountInput.min = BIG_BLIND;
+                }
+                if (parseInt(betAmountInput.value) < parseInt(betAmountInput.min)) {
+                    betAmountInput.value = betAmountInput.min;
+                }
+
+
+                betAmountInput.disabled = betRaiseButton.disabled;
+                betRaiseButton.style.opacity = betRaiseButton.disabled ? 0.5 : 1;
+                betAmountInput.style.opacity = betRaiseButton.disabled ? 0.5 : 1;
+            }
+            nextHandButton.style.display = nonActionablePhase ? 'inline-block' : 'none';
+        }
+
+        function showInfo(message) {
+            infoAreaDiv.textContent = message;
+        }
+
+        function showMessage(message, duration = 3000) {
+            messageBox.textContent = message;
+            messageBox.style.display = 'block';
+            setTimeout(() => {
+                messageBox.style.display = 'none';
+            }, duration);
+        }
+
+        function playerAction(actionType) {
+            if (!playerTurn || playerFolded || aiFolded || gamePhase === 'SHOWDOWN') return;
+
+            const amountToCall = currentBet - playerBetInRound;
+            let actionText = "";
+
+            switch (actionType) {
+                case 'fold':
+                    debugLog("玩家弃牌");
+                    playerFolded = true;
+                    actionText = "玩家弃牌";
+                    playerRoundActionDiv.textContent = actionText;
+                    showInfo(actionText + "。");
+                    endHand();
+                    break;
+                case 'check':
+                    if (amountToCall > 0) {
+                        showMessage("不能过牌，当前需要跟注。");
+                        return;
+                    }
+                    debugLog("玩家过牌");
+                    playerRoundActionDiv.textContent = actionText;
+                    showInfo(actionText + "。");
+                    lastRaiser = null;
+                    endPlayerTurn();
+                    break;
+                case 'call':
+                    if (amountToCall <= 0) {
+                        showMessage("无需跟注，请过牌或下注/加注。");
+                        return;
+                    }
+                    const callAmount = Math.min(amountToCall, playerChips);
+                    playerChips -= callAmount;
+                    playerBetInRound += callAmount;
+                    pot += callAmount;
+                    debugLog(`玩家跟注 ${callAmount}`);
+                    playerRoundActionDiv.textContent = actionText;
+                    showInfo(actionText + "。");
+                    endPlayerTurn();
+                    break;
+                case 'bet': // Handles both bet and raise from button
+                case 'raise':
+                    const betValueInput = parseInt(betAmountInput.value); // This is the TOTAL amount player wants their bet to be for the round
+                    if (isNaN(betValueInput)) {
+                        showMessage("请输入有效的下注金额。");
+                        return;
+                    }
+
+                    const actualBetRaiseAmount = betValueInput - playerBetInRound; // Money to add to pot this turn
+
+                    if (actualBetRaiseAmount <= 0 && betValueInput <= currentBet) { // Not a valid bet/raise amount
+                        showMessage("下注/加注额必须大于当前下注。");
+                        return;
+                    }
+                    if (playerChips < actualBetRaiseAmount) {
+                        showMessage("筹码不足。");
+                        return;
+                    }
+
+                    // Bet logic (currentBet is 0)
+                    if (currentBet === 0) {
+                        if (betValueInput < BIG_BLIND && playerChips > betValueInput) {
+                            showMessage(`首次下注至少为 ${BIG_BLIND}。`);
+                            return;
+                        }
+                        actionText = `玩家下注 ${betValueInput}`;
+                        currentBet = betValueInput;
+                    } else { // Raise logic (currentBet > 0)
+                        const minRaiseAmount = BIG_BLIND; // Minimum amount to raise BY
+                        if ((betValueInput - currentBet) < minRaiseAmount && playerChips > actualBetRaiseAmount) {
+                            showMessage(`加注额至少要比当前下注 (${currentBet}) 多 ${minRaiseAmount} (即总计 ${currentBet + minRaiseAmount})。`);
+                            return;
+                        }
+                        if (betValueInput < currentBet + minRaiseAmount && playerChips > actualBetRaiseAmount) { // Check if total bet is at least currentBet + minRaise
+                            showMessage(`加注后总金额至少为 ${currentBet + minRaiseAmount}。`);
+                            return;
+                        }
+                        actionText = `玩家加注到 ${betValueInput}`;
+                        currentBet = betValueInput;
+                    }
+
+                    playerChips -= actualBetRaiseAmount;
+                    playerBetInRound = betValueInput; // Player's total bet in this round is now betValueInput
+                    pot += actualBetRaiseAmount;
+
+                    playerRoundActionDiv.textContent = actionText;
+                    showInfo(actionText + "。");
+                    lastRaiser = 'player';
+                    endPlayerTurn();
+                    break;
+            }
+            updateUI();
+        }
+
+        function endPlayerTurn() {
+            playerTurn = false;
+            updateActionButtons(); // Disable player buttons
+            if (bettingRoundOver()) {
+                proceedToNextPhase();
+            } else if (!aiFolded) { // Only proceed to AI if AI hasn't folded
+                setTimeout(aiAction, 1000);
+            } else { // AI folded, player's action might end hand or round
+                endHand(); // Or re-evaluate if round ends
+            }
+        }
+
+        function aiAction() {
+            if (aiFolded || playerFolded || gamePhase === 'SHOWDOWN') return;
+
+            const amountToCall = currentBet - aiBetInRound;
+            let actionText = '';
+
+            if (amountToCall === 0) { // AI can check or bet
+                if (Math.random() < 0.4 && aiChips >= BIG_BLIND) { // 40% chance to bet
+                    const betAmount = BIG_BLIND; // AI bets the minimum
+                    aiChips -= betAmount;
+                    aiBetInRound += betAmount;
+                    pot += betAmount;
+                    currentBet = aiBetInRound;
+                    actionText = `AI 下注 ${betAmount}`;
+                    lastRaiser = 'ai';
+                } else { // 60% chance to check
+                    actionText = "AI 过牌";
+                    lastRaiser = null;
+                }
+            } else { // AI must call, raise, or fold
+                if (amountToCall < aiChips / 4 && aiChips >= amountToCall && Math.random() < 0.85) { // 85% chance to call if affordable
+                    const callAmount = Math.min(amountToCall, aiChips);
+                    aiChips -= callAmount;
+                    aiBetInRound += callAmount;
+                    pot += callAmount;
+                    actionText = `AI 跟注 ${callAmount}`;
+                    // lastRaiser remains unchanged if it's a call
+                } else { // Fold
+                    aiFolded = true;
+                    actionText = "AI 弃牌";
+                }
+            }
+
+            aiRoundActionDiv.textContent = actionText;
+            showInfo(actionText + "。");
+            updateUI();
+
+            if (aiFolded) {
+                endHand();
+            } else {
+                endAiTurn();
+            }
+        }
+
+        function endAiTurn() {
+            playerTurn = true;
+            updateActionButtons(); // Enable player buttons
+            if (bettingRoundOver()) {
+                proceedToNextPhase();
+            } else if (!playerFolded) { // Only prompt player if they haven't folded
+                showInfo("轮到你了。");
+            } else {
+                endHand(); // Or re-evaluate
+            }
+        }
+
+        function bettingRoundOver() {
+            if (playerFolded || aiFolded) return true;
+
+            const betsAreEqual = playerBetInRound === aiBetInRound;
+            // Meaningful action: pot has more than just initial blinds, or it's post-flop and some betting/checking happened.
+            const significantActionOccurred = (pot > (SMALL_BLIND + BIG_BLIND)) || (gamePhase !== 'PREFLOP' && pot > 0);
+            // Or, if currentBet is 0 and it's post-flop (check-around scenario)
+            const postFlopCheckAround = (gamePhase !== 'PREFLOP' && currentBet === 0 && playerBetInRound === 0 && aiBetInRound === 0);
+
+
+            if (betsAreEqual) {
+                // Case 1: Action is on the player who made the last raise (other player called). Round ends.
+                // playerTurn is true if AI just acted. playerTurn is false if Player just acted.
+                if (!playerTurn && lastRaiser === 'player') return true; // AI called player's raise. Action was on player, now AI's turn (but round ends).
+                if (playerTurn && lastRaiser === 'ai') return true;   // Player called AI's raise. Action was on AI, now Player's turn (but round ends).
+
+                // Case 2: No un-called raise (lastRaiser is null).
+                // Previous action was a check or a call that matched the bet.
+                // Round ends if significant action has occurred, or it's a check-around post-flop.
+                if (lastRaiser === null && (significantActionOccurred || postFlopCheckAround)) {
+                    // Check if BB option was exercised preflop and BB checked
+                    if (gamePhase === 'PREFLOP' && currentBet === BIG_BLIND) {
+                        // If player is BB (dealerIsPlayer) and just checked (so !playerTurn is true, as turn passed to AI)
+                        if (!playerTurn && dealerIsPlayer) return true;
+                        // If AI is BB (!dealerIsPlayer) and just checked (so playerTurn is true, as turn passed to Player)
+                        if (playerTurn && !dealerIsPlayer) return true;
+                    }
+                    // If not preflop BB check, then any other check-around or call-call sequence
+                    if (gamePhase !== 'PREFLOP' || pot > SMALL_BLIND + BIG_BLIND) return true;
+                }
+            }
+            return false;
+        }
+
+        function proceedToNextPhase() {
+            playerBetInRound = 0;
+            aiBetInRound = 0;
+            currentBet = 0;
+            lastRaiser = null;
+            playerRoundActionDiv.textContent = ''; // 清除上一轮动作
+            aiRoundActionDiv.textContent = '';    // 清除上一轮动作
+
+            switch (gamePhase) {
+                case 'PREFLOP': gamePhase = 'FLOP'; dealCommunityCards(3); break;
+                case 'FLOP': gamePhase = 'TURN'; dealCommunityCards(1); break;
+                case 'TURN': gamePhase = 'RIVER'; dealCommunityCards(1); break;
+                case 'RIVER': gamePhase = 'SHOWDOWN'; showdown(); return;
+                default: console.error("无效的游戏阶段:", gamePhase); startHand(); return;
+            }
+
+            showInfo(`进入 ${gamePhase} 阶段。`);
+            // Post-flop: SB (或 first active player left of dealer) acts first.
+            // If player is dealer, AI is SB. If AI is dealer, Player is SB.
+            playerTurn = !dealerIsPlayer;
+            if (playerFolded) playerTurn = false; // If player folded, AI's turn (if AI active)
+            if (aiFolded) playerTurn = true;     // If AI folded, Player's turn (if Player active)
+
+            updateUI();
+
+            if (playerFolded || aiFolded) { // If one folded, the other wins pot now or proceed to showdown if all cards dealt
+                endHand(); // Let endHand decide if it's showdown or win by fold
+                return;
+            }
+
+
+            if (!playerTurn && !aiFolded) {
+                setTimeout(aiAction, 1000);
+            } else if (playerTurn && !playerFolded) {
+                showInfo("轮到你了。");
+                updateActionButtons(); // Ensure buttons are correctly enabled/disabled for player
+            }
+        }
+
+        function dealCommunityCards(count) {
+            if (deck.length > 0 && communityCards.length < 5) dealCard(deck); // Burn one card
+            for (let i = 0; i < count && deck.length > 0 && communityCards.length < 5; i++) {
+                communityCards.push(dealCard(deck));
+            }
+        }
+
+        function displayHandEvaluation(element, handEvalResult, who) {
+            element.innerHTML = ''; // Clear previous content
+            const nameSpan = document.createElement('span');
+            nameSpan.textContent = `${who}牌型: ${HAND_RANK_NAMES[handEvalResult.rank]} (`;
+            element.appendChild(nameSpan);
+
+            handEvalResult.actualCards.forEach(card => {
+                element.appendChild(createCardElement(card));
+            });
+
+            const closingParen = document.createElement('span');
+            closingParen.textContent = `)`;
+            element.appendChild(closingParen);
+        }
+
+        function showdown() {
+            gamePhase = 'SHOWDOWN';
+            showInfo("摊牌比大小！");
+            playerRoundActionDiv.textContent = ''; // 清除最终的动作状态
+            aiRoundActionDiv.textContent = '';
+
+            const playerHandEval = evaluateHand(playerCards.concat(communityCards));
+            const aiHandEval = evaluateHand(aiCards.concat(communityCards));
+
+            displayHandEvaluation(playerHandRankDiv, playerHandEval, "你的");
+            displayHandEvaluation(aiHandRankDiv, aiHandEval, "AI ");
+
+
+            let winner = '';
+            if (playerHandEval.rank > aiHandEval.rank) winner = 'player';
+            else if (aiHandEval.rank > playerHandEval.rank) winner = 'ai';
+            else { // Same rank, compare kicker values
+                for (let i = 0; i < playerHandEval.values.length; i++) {
+                    if (playerHandEval.values[i] > aiHandEval.values[i]) { winner = 'player'; break; }
+                    if (aiHandEval.values[i] > playerHandEval.values[i]) { winner = 'ai'; break; }
+                }
+                if (winner === '') winner = 'split';
+            }
+
+            if (winner === 'player') { playerChips += pot; showMessage("恭喜，你赢了！"); }
+            else if (winner === 'ai') { aiChips += pot; showMessage("很遗憾，AI 赢了。"); }
+            else { playerChips += Math.floor(pot / 2); aiChips += Math.ceil(pot / 2); showMessage("平局，平分底池！"); }
+
+            pot = 0;
+            updateUI();
+            nextHandButton.style.display = 'inline-block';
+            disableActionButtons();
+        }
+
+        function disableActionButtons() {
+            foldButton.disabled = true; checkCallButton.disabled = true;
+            betRaiseButton.disabled = true; betAmountInput.disabled = true;
+            [foldButton, checkCallButton, betRaiseButton, betAmountInput].forEach(el => el.style.opacity = 0.5);
+        }
+
+        function endHand() {
+            // If hand ends due to folding before showdown
+            if (playerFolded && !aiFolded) {
+                aiChips += pot;
+                showMessage("你弃牌了，AI 赢得底池。");
+            } else if (aiFolded && !playerFolded) {
+                playerChips += pot;
+                showMessage("AI 弃牌了，你赢得了底池。");
+            } else if (playerFolded && aiFolded) {
+                // This case should ideally not happen if logic is correct, but as a fallback:
+                // Split pot or award to last non-folder if applicable - for simplicity, just log.
+                console.log("Both folded, pot remains or should be split based on prior bets.");
+            } else {
+                // If neither folded, but endHand is called, it implies showdown should occur or already occurred.
+                // If not yet SHOWDOWN phase, proceed to it if all cards are dealt.
+                if (gamePhase !== 'SHOWDOWN' && communityCards.length === 5) {
+                    showdown();
+                    return;
+                } else if (gamePhase !== 'SHOWDOWN') {
+                    // Not enough cards for showdown, but no one folded. This implies an issue.
+                    // For now, assume if endHand is called and no one folded, it's effectively a showdown if possible.
+                    // This path should be less common.
+                }
+            }
+            // If showdown already handled pot, pot is 0. Otherwise, it's now 0 after awarding.
+            pot = 0;
+            gamePhase = 'SHOWDOWN'; // Mark as ended
+            updateUI();
+            nextHandButton.style.display = 'inline-block';
+            disableActionButtons();
+        }
+
+        function startHand() {
+            if (playerChips <= 0) { showMessage("你没筹码了！游戏结束。", 10000); disableActionButtons(); nextHandButton.disabled = true; nextHandButton.style.opacity = 0.5; return; }
+            if (aiChips <= 0) { showMessage("AI 没筹码了！你赢得了游戏！", 10000); disableActionButtons(); nextHandButton.disabled = true; nextHandButton.style.opacity = 0.5; return; }
+
+            deck = createDeck(); shuffleDeck(deck);
+            playerCards = []; aiCards = []; communityCards = [];
+            pot = 0; currentBet = 0; playerBetInRound = 0; aiBetInRound = 0;
+            playerFolded = false; aiFolded = false; gamePhase = 'PREFLOP'; lastRaiser = null;
+
+            playerRoundActionDiv.textContent = ''; // 清空上一局的玩家动作
+            aiRoundActionDiv.textContent = '';    // 清空上一局的 AI 动作
+            playerHandRankDiv.innerHTML = '';     // 清空玩家牌型显示
+            aiHandRankDiv.innerHTML = '';         // 清空 AI 牌型显示
+
+
+            dealerIsPlayer = !dealerIsPlayer;
+            showInfo(dealerIsPlayer ? "你是庄家 (按钮)" : "AI 是庄家 (按钮)");
+
+            let sbPlayer = dealerIsPlayer ? 'ai' : 'player';
+            let bbPlayer = dealerIsPlayer ? 'player' : 'ai';
+
+            // Post Small Blind
+            if (sbPlayer === 'player') {
+                const blind = Math.min(SMALL_BLIND, playerChips);
+                playerChips -= blind; playerBetInRound = blind; pot += blind;
+                playerRoundActionDiv.textContent = `小盲 ${blind}`;
+            } else {
+                const blind = Math.min(SMALL_BLIND, aiChips);
+                aiChips -= blind; aiBetInRound = blind; pot += blind;
+                aiRoundActionDiv.textContent = `小盲 ${blind}`;
+            }
+            // Post Big Blind
+            if (bbPlayer === 'player') {
+                const blind = Math.min(BIG_BLIND, playerChips - (sbPlayer === 'player' ? 0 : playerBetInRound)); // ensure enough for BB if also SB
+                const actualBBNeeded = BIG_BLIND - (sbPlayer === 'player' ? playerBetInRound : 0); // if player was SB, only needs diff
+                const finalBB = Math.min(playerChips, actualBBNeeded > 0 ? actualBBNeeded : BIG_BLIND);
+
+                playerChips -= finalBB;
+                playerBetInRound += finalBB; // Add to existing SB if player is also SB (heads-up dealer is SB)
+                if (dealerIsPlayer) playerBetInRound = Math.max(playerBetInRound, BIG_BLIND); else playerBetInRound = BIG_BLIND;
+
+
+                pot += finalBB;
+                playerRoundActionDiv.textContent = `大盲 ${playerBetInRound}`;
+            } else {
+                const blind = Math.min(BIG_BLIND, aiChips - (sbPlayer === 'ai' ? 0 : aiBetInRound));
+                const actualBBNeeded = BIG_BLIND - (sbPlayer === 'ai' ? aiBetInRound : 0);
+                const finalBB = Math.min(aiChips, actualBBNeeded > 0 ? actualBBNeeded : BIG_BLIND);
+
+                aiChips -= finalBB;
+                aiBetInRound += finalBB;
+                if (!dealerIsPlayer) aiBetInRound = Math.max(aiBetInRound, BIG_BLIND); else aiBetInRound = BIG_BLIND;
+
+                pot += finalBB;
+                aiRoundActionDiv.textContent = `大盲 ${aiBetInRound}`;
+            }
+            currentBet = BIG_BLIND;
+
+            playerCards.push(dealCard(deck)); aiCards.push(dealCard(deck));
+            playerCards.push(dealCard(deck)); aiCards.push(dealCard(deck));
+
+            // Preflop: SB acts first (player to the left of BB if more than 2 players)
+            // Heads-up: Dealer is SB and acts first pre-flop. Non-dealer is BB.
+            playerTurn = dealerIsPlayer; // If player is dealer (SB), player acts first preflop.
+
+            updateUI();
+            nextHandButton.style.display = 'none';
+            enableActionButtons();
+
+            // Clear round actions after a brief moment for blinds to be seen
+            setTimeout(() => {
+                if (gamePhase === 'PREFLOP') { // Only clear if still in preflop, action hasn't moved on
+                    if (playerTurn && playerRoundActionDiv.textContent.includes('盲')) playerRoundActionDiv.textContent = '等待行动...';
+                    if (!playerTurn && aiRoundActionDiv.textContent.includes('盲')) aiRoundActionDiv.textContent = '等待行动...';
+                }
+            }, 1200);
+
+
+            if (!playerTurn && !aiFolded) {
+                setTimeout(aiAction, 1500);
+            } else if (playerTurn && !playerFolded) {
+                showInfo("轮到你了。");
+            }
+        }
+
+        function enableActionButtons() {
+            foldButton.disabled = false; checkCallButton.disabled = false;
+            betRaiseButton.disabled = false; betAmountInput.disabled = false;
+            updateActionButtons(); // This will set opacities and specific disables
+        }
+
+        foldButton.addEventListener('click', () => playerAction('fold'));
+        checkCallButton.addEventListener('click', () => {
+            const amountToCall = currentBet - playerBetInRound;
+            playerAction(amountToCall <= 0 ? 'check' : 'call');
+        });
+        betRaiseButton.addEventListener('click', () => playerAction('bet')); // 'bet' covers bet/raise
+        nextHandButton.addEventListener('click', startHand);
+
+        startHand();
+    </script>
+</body>
+
+</html>
