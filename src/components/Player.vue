@@ -1,6 +1,7 @@
 <template>
   <div class="player" :class="{
     active: player.isActive,
+    folded: player.lastAction === 'fold',
     'is-winner': player.isWinner,
     'is-showdown': isShowdown
   }">
@@ -26,6 +27,21 @@
     <div class="player-status">
       <span>{{ getActionText(player.lastAction) }} ¥{{ player.currentBet }}</span>
       <span v-if="player.isWinner" class="winner-badge">WINNER</span>
+    </div>
+    <div v-if="isEditing" class="player-config">
+      <div>
+        <label>上桌: </label>
+        <input type="checkbox" v-model="player.isActive">
+      </div>
+      <div>
+        <label>游戏风格: </label>
+        <select v-model="player.style">
+          <option value="tight">紧</option>
+          <option value="loose">松</option>
+          <option value="aggressive">激进</option>
+          <option value="conservative">保守</option>
+        </select>
+      </div>
     </div>
   </div>
 </template>
@@ -94,6 +110,11 @@
 
 .player.is-showdown .cards {
   opacity: 0.7;
+}
+
+.player:not(.active) {
+  opacity: 0.3;
+  transition: opacity 0.3s ease;
 }
 
 .best-hand {
@@ -168,10 +189,15 @@ export default defineComponent({
           cards: CardType[]
         }
         isUser?: boolean // 新增字段
+        style: string
       },
       required: true
     },
     isShowdown: {
+      type: Boolean,
+      default: false
+    },
+    isEditing: {
       type: Boolean,
       default: false
     }

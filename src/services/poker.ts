@@ -36,12 +36,14 @@ export function createPlayer(id: number, name: string, chips: number): Player {
         lastAction: '',
         isWinner: false,
         winAmount: 0,
+        style: 'checkCall'
     } as Player;
 }
 
 // 创建TableState
 export function createTableState(): TableState {
     return {
+        minBuyin: 1000,
         pot: 0,
         sidePots: [], // 新增 sidePots 属性，初始化为空数组
         deck: [] as Card[], // 新增 deck 属性，初始化为空的 Card 数组
@@ -52,6 +54,11 @@ export function createTableState(): TableState {
         gameStage: 'waiting',
         dealerPosition: 0,
         currentPlayer: 0,
+        delayTimes: {
+            playerAction: 1000,
+            betweenStages: 3000,
+            betweenGames: 5000,
+        }
     } as TableState;
 }
 

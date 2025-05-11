@@ -21,6 +21,7 @@ export interface TableState {
     // 筹码相关字段
     smallBlind: number
     bigBlind: number
+    minBuyin: number // 单次买入最低额度, 每次买入必须是这个额度的整数倍
     pot: number
     sidePots: SidePot[]
     currentBet: number
@@ -31,6 +32,11 @@ export interface TableState {
     gameStage: 'waiting' | 'preflop' | 'flop' | 'turn' | 'river' | 'showdown'
     dealerPosition: number
     currentPlayer: number
+    delayTimes: {
+        playerAction: number
+        betweenStages: number
+        betweenGames: number
+    }
 }
 
 export interface Player {
@@ -53,7 +59,8 @@ export interface Player {
         handRank: number
         value: number
         cards: Card[]
-    }
+    },
+    style: 'checkCall' | 'tight' | 'loose' | 'aggressive' | 'conservative' // 玩家风格
 }
 
 export interface GameLog {

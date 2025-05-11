@@ -1,5 +1,5 @@
 import { createStore } from 'vuex'
-import { Player, GameLog, GameState, STAGES, PlayerAction } from '../services/types'
+import { Player, GameState, STAGES, PlayerAction } from '../services/types'
 import { createGameState, createDeck, shuffleDeck, addLog } from '../services/poker'
 import { evaluateHand } from '../services/evaluation'
 
@@ -8,6 +8,43 @@ export default createStore<GameState>({
     mutations: {
         ADD_LOG(state, log: string) {
             addLog(state, log)
+        },
+        SET_GAME_STAGE(state, stage: string) {
+            state.table.gameStage = stage
+        },
+        RESET_DEALER_POSITION(state) {
+            state.table.dealerPosition = 0
+        },
+        SET_PLAYER_COUNT(state, count: number) {
+            const player_order = [1, 7, 3, 9, 5, 11, 4, 10, 2, 8, 6, 12]
+            player_order.forEach((playerId, index) => {
+                const player = state.players.find(p => p.id === playerId)
+                if (!player) {
+                    console.error(`Player with id ${playerId} not found`)
+                    throw new Error(`Player with id ${playerId} not found`)
+                    return
+                }
+                if (index < count) {
+                    player.isActive = true
+                    player.chips = 1000
+                    player.buyin = 1000
+                } else {
+                    player.isActive = false
+                    player.chips = 0
+                    player.buyin = 0
+                }
+            })
+        },
+        SET_GAME_MODE(state, mode: string) {
+            state.players[0].isUser = mode === 'manual'
+        },
+        SET_BUYIN_AMOUNT(state, amount: number) {
+            state.players.forEach(player => {
+                if (player.isActive) {
+                    player.buyin = amount
+                    player.chips = amount
+                }
+            })
         },
         // 设置玩家列表
         SET_PLAYERS(state, players: Player[]) {
@@ -24,15 +61,6 @@ export default createStore<GameState>({
             }
         },
         // ------- 游戏流程方法 --------
-        // 准备新游戏
-        NEW_GAME(state) {
-            // 重置所有玩家筹码
-            state.players.forEach(player => {
-                player.chips = 1000
-                player.buyin = 1000
-            })
-            addLog(state, '重置玩家buyin, 开始新游戏')   
-        },
         // 准备下一局游戏
         NEXT_ROUND(state) {
             // 重置牌桌状态
@@ -60,10 +88,12 @@ export default createStore<GameState>({
                 player.currentBet = 0
                 player.isAllIn = false
                 player.lastAction = ''
-                player.isActive = player.chips > 0
                 player.isWinner = false
                 player.winAmount = 0
                 player.handValue = undefined
+                if (player.isActive && player.chips <= 0) {
+                    player.isActive = false
+                }
             })
             addLog(state, '重置牌桌状态, 开始下一局游戏')
         },
@@ -78,7 +108,7 @@ export default createStore<GameState>({
                     throw new Error(`Player with id ${playerId} not found`)
                     return
                 }
-                if (player.isActive) {
+                if (player.isActive && player.lastAction !== 'fold') {
                     state.table.currentPlayer = playerId
                     break
                 }
@@ -87,17 +117,21 @@ export default createStore<GameState>({
         // 进入下一个阶段
         NEXT_STAGE(state) {
             const currentIndex = STAGES.indexOf(state.table.gameStage)
-            if (currentIndex < STAGES.length - 1) {
-                state.table.gameStage = STAGES[currentIndex + 1]
+            if (currentIndex >= STAGES.length - 1) {
+                console.error('Invalid stage transition')
+                throw new Error('Invalid stage transition')
+            }
+
+            state.table.gameStage = STAGES[currentIndex + 1]
+            if (state.table.gameStage != 'showdown') {
                 state.table.currentBet = 0
                 state.table.currentPlayer = state.table.dealerPosition
                 state.players.forEach(player => {
-                    player.currentBet = 0
-                    player.lastAction = ''
+                    if (player.isActive) {
+                        player.currentBet = 0
+                        player.lastAction = ''
+                    }
                 })
-            } else {
-                console.error('Invalid stage transition')
-                throw new Error('Invalid stage transition')
             }
             addLog(state, `进入${state.table.gameStage}阶段`)
         },
@@ -176,24 +210,25 @@ export default createStore<GameState>({
                 return
             }
 
-            if (action === 'fold') {
-                player.isActive = false
-                player.lastAction = 'fold'
-            } else {
-                player.currentBet += amount
-                player.chips -= amount
-                player.lastAction = action
-                state.table.pot += amount
-                state.table.currentBet = Math.max(state.table.currentBet, player.currentBet)
-            }
+            player.currentBet += amount
+            player.chips -= amount
+            player.lastAction = action
+            state.table.pot += amount
+            state.table.currentBet = Math.max(state.table.currentBet, player.currentBet)
             addLog(state, `Player ${playerId} ${action} ${amount} chips`)
+        },
+        RESET_PLAYER_BUYINS(state, minBuyin: number) {
+            state.table.minBuyin = minBuyin
+            state.players.forEach(player => {
+                player.buyin = 0
+                player.chips = minBuyin
+            })
         },
     },
     actions: {
         // ------- 游戏流程方法 --------
         // 开始游戏
         async startGame({ commit, dispatch, state }) {
-            commit('NEW_GAME')
             commit('NEXT_ROUND')
             await dispatch('progressGame')
         },
@@ -218,7 +253,7 @@ export default createStore<GameState>({
                 const { isEnd, reason } = await dispatch('isStageEnd')
                 if (isEnd) {
                     commit('NEXT_STAGE')
-                    const activePlayers = state.players.filter(p => p.isActive)
+                    const activePlayers = state.players.filter(p => p.isActive && p.lastAction !== 'fold')
                     if (state.table.gameStage === 'showdown' || activePlayers.length === 1) {
                         // 游戏结束, 结算筹码，退出
                         await dispatch('settleChips')
@@ -243,10 +278,10 @@ export default createStore<GameState>({
                 return { isEnd: true, reason: "等待阶段" }
             }
             const currentPlayer = state.players.find(p => p.id === state.table.currentPlayer)
-            if (!currentPlayer || !currentPlayer.isActive) {
+            if (!currentPlayer || !currentPlayer.isActive || currentPlayer.lastAction === 'fold') {
                 return { isEnd: false, reason: "非活跃玩家" }
             }
-            const activePlayers = state.players.filter(p => p.isActive)
+            const activePlayers = state.players.filter(p => p.isActive && p.lastAction!== 'fold')
             if (activePlayers.length === 1) {
                 return { isEnd: true, reason: "唯一活跃玩家" }
             }
@@ -265,7 +300,7 @@ export default createStore<GameState>({
         settleChips({ state, commit }) {
             // 计算边池
             state.table.sidePots = []
-            const activePlayers = state.players.filter(p => p.isActive)
+            const activePlayers = state.players.filter(p => p.isActive && p.lastAction!== 'fold')
             if (activePlayers.length === 0) {
                 commit('ADD_LOG', '没有活跃玩家，本局游戏结束')
                 throw new Error('没有活跃玩家，本局游戏结束')
@@ -340,9 +375,9 @@ export default createStore<GameState>({
             await dispatch('playerAction', action)
         },
         // 玩家行动
-        async playerAction({ state, commit, dispatch }, { playerId = state.table.currentPlayer, action = { type: 'checkCall', amount: 0 } as PlayerAction }) {
+        async playerAction({ state, commit }, { playerId = state.table.currentPlayer, action = { type: 'checkCall', amount: 0 } as PlayerAction }) {
             const player = state.players.find(p => p.id === playerId)
-            if (!player || !player.isActive) {
+            if (!player || !player.isActive || player.lastAction === 'fold') {
                 console.error(`Player with id ${playerId} is not active or not found`)
                 throw new Error(`Player with id ${playerId} is not active or not found`)
                 return

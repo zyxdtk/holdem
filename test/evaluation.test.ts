@@ -145,4 +145,28 @@ describe('evaluateHand', () => {
         expect(result.handType).toBe(1)
         expect(result.handName).toBe('高牌')
     })
+
+    // 测试高牌对比
+    it('should compare high cards correctly', () => {
+        const hand1: Card[] = [
+            { suit: '♥', rank: 'A', rankValue: 14 },
+            { suit: '♦', rank: 'K', rankValue: 13 }
+        ]
+        const hand2: Card[] = [
+            { suit: '♥', rank: 'A', rankValue: 14 },
+            { suit: '♦', rank: '2', rankValue: 2 }
+        ]
+        const community: Card[] = [
+            { suit: '♠', rank: 'Q', rankValue: 12 },
+            { suit: '♣', rank: 'J', rankValue: 11 },
+            { suit: '♥', rank: '9', rankValue: 9}
+        ]
+        const result1 = evaluateHand(hand1, community)
+        const result2 = evaluateHand(hand2, community)
+        expect(result1.handType).toBe(1)
+        expect(result1.handName).toBe('高牌')
+        expect(result2.handType).toBe(1)
+        expect(result2.handName).toBe('高牌')
+        expect(result1.value).toBeGreaterThan(result2.value)
+    })
 })

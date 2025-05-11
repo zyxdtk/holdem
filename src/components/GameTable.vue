@@ -1,12 +1,15 @@
 <template>
   <div class="poker-table">
     <div class="table-surface">
-      <div class="community-cards-area">
+      <div v-if="gameStage !== 'waiting'" class="community-cards-area">
         <Card
           v-for="(card, index) in communityCards"
           :key="index"
           :card="card"
         />
+      </div>
+      <div v-if="gameStage !== 'waiting'" class="pot-display">
+        底池: ¥{{ pot }}
       </div>
       <div class="players-container">
         <Player 
@@ -14,13 +17,12 @@
           :key="player.id"
           :player="player"
           :isShowdown="gameStage === 'showdown'"
+          :isEditing="gameStage === 'waiting'"
         ></Player>
       </div>
       <Controls />
     </div>
-    <div class="pot-display">
-      底池: ¥{{ pot }}
-    </div>
+    
   </div>
 </template>
 
