@@ -1,12 +1,11 @@
-import type { Card, PlayerAction, PlayerState, TableState, OpponentState} from './types'
+import type { Card, PlayerAction, Player, TableState} from './types'
 import { evaluateHand } from './evaluation'
 
 
 
 export function generateAction(
-  player: PlayerState,
-  table: TableState,
-  opponents: OpponentState[]
+  player: Player,
+  table: TableState
 ): PlayerAction {
   // 计算手牌强度 (0-1)
   const handStrength = calculateHandStrength(player.hand, table.communityCards)
@@ -21,6 +20,8 @@ export function generateAction(
       return aggressiveStrategy(player, table, handStrength)
     case 'conservative':
       return conservativeStrategy(player, table, handStrength)
+    default:
+      return { type: 'checkCall', amount: Math.min(table.currentBet, player.chips) }
   }
 }
 
@@ -36,66 +37,71 @@ function calculateHandStrength(hand: Card[], communityCards: Card[]): number {
   return evaluation.handType / 10 // 0-0.9
 }
 
-function tightStrategy(player: PlayerState, table: TableState, handStrength: number): PlayerAction {
+function calculateRaiseAmount(player: Player, table: TableState, multiplier: number): number {
+  const baseAmount = Math.max(table.currentBet * multiplier, table.pot * 0.3)
+  let raiseAmount = Math.min(player.chips, baseAmount)
+  
+  // 如果不是全押，则确保加注金额是currentBet和小盲注的整数倍
+  if (raiseAmount < player.chips) {
+    if (table.currentBet > 0) {
+      raiseAmount = Math.floor(raiseAmount / table.currentBet) * table.currentBet
+    }
+    raiseAmount = Math.max(raiseAmount, table.currentBet * multiplier)
+    // 确保是小盲注的整数倍
+    raiseAmount = Math.floor(raiseAmount / table.smallBlind) * table.smallBlind
+  }
+  
+  return Math.min(raiseAmount, player.chips)
+}
+
+function tightStrategy(player: Player, table: TableState, handStrength: number): PlayerAction {
   if (handStrength < 0.3) {
     return { type: 'fold', amount: 0 }
   }
   
-  if (handStrength < 0.6) {
+  if (handStrength < 0.6 || table.raiseCount > 2) {
     return { type: 'checkCall', amount: Math.min(table.currentBet, player.chips) }
   }
   
-  const raiseAmount = Math.min(
-    player.chips,
-    Math.max(table.currentBet * 1.5, table.pot * 0.3)
-  )
+  const raiseAmount = calculateRaiseAmount(player, table, 1.5)
   return { type: 'raise', amount: raiseAmount }
 }
 
-function looseStrategy(player: PlayerState, table: TableState, handStrength: number): PlayerAction {
+function looseStrategy(player: Player, table: TableState, handStrength: number): PlayerAction {
   if (handStrength < 0.2 && Math.random() < 0.3) {
     return { type: 'fold', amount: 0 }
   }
   
-  if (handStrength < 0.5 || Math.random() < 0.4) {
+  if (handStrength < 0.5 || Math.random() < 0.4 || table.raiseCount > 3 ) {
     return { type: 'checkCall', amount: Math.min(table.currentBet, player.chips) }
   }
   
-  const raiseAmount = Math.min(
-    player.chips,
-    Math.max(table.currentBet * 2, table.pot * 0.5)
-  )
+  const raiseAmount = calculateRaiseAmount(player, table, 2)
   return { type: 'raise', amount: raiseAmount }
 }
 
-function aggressiveStrategy(player: PlayerState, table: TableState, handStrength: number): PlayerAction {
+function aggressiveStrategy(player: Player, table: TableState, handStrength: number): PlayerAction {
   if (handStrength < 0.2 && Math.random() < 0.1) {
     return { type: 'fold', amount: 0 }
   }
   
-  if (handStrength < 0.4 && Math.random() < 0.3) {
+  if (handStrength < 0.4 && Math.random() < 0.3 || table.raiseCount > 4) {
     return { type: 'checkCall', amount: Math.min(table.currentBet, player.chips) }
   }
   
-  const raiseAmount = Math.min(
-    player.chips,
-    Math.max(table.currentBet * 3, table.pot * 0.7)
-  )
+  const raiseAmount = calculateRaiseAmount(player, table, 3)
   return { type: 'raise', amount: raiseAmount }
 }
 
-function conservativeStrategy(player: PlayerState, table: TableState, handStrength: number): PlayerAction {
+function conservativeStrategy(player: Player, table: TableState, handStrength: number): PlayerAction {
   if (handStrength < 0.4) {
     return { type: 'fold', amount: 0 }
   }
   
-  if (handStrength < 0.8 || table.currentBet > player.chips * 0.3) {
+  if (handStrength < 0.8 || table.currentBet > player.chips * 0.3 || table.raiseCount > 1) {
     return { type: 'checkCall', amount: Math.min(table.currentBet, player.chips) }
   }
   
-  const raiseAmount = Math.min(
-    player.chips,
-    Math.max(table.currentBet * 1.2, table.pot * 0.2)
-  )
+  const raiseAmount = calculateRaiseAmount(player, table, 1.2)
   return { type: 'raise', amount: raiseAmount }
 }

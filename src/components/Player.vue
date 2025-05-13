@@ -6,7 +6,7 @@
     'is-showdown': isShowdown
   }">
     <div class="player-name">
-      {{ player.name }}
+      {{ player.name }}-{{ getStyleName(player.style) }}
       <span v-if="player.isDealer" class="dealer-badge">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
           <circle cx="12" cy="12" r="10" fill="#FFD700" stroke="#5D4037" stroke-width="1"/>
@@ -18,8 +18,8 @@
     <div class="cards">
       <Card v-for="card in visibleCards" :key="card.id" :card="card" />
     </div>
-    <div class="best-hand" v-if="isShowdown && player.isWinner">
-      <div class="best-hand-label">最佳牌型:</div>
+    <div class="best-hand" v-if="isShowdown">
+      <div class="best-hand-label">最佳牌型: {{ handName }}</div>
       <div class="best-hand-cards">
         <Card v-for="(card, index) in player.handValue?.cards" :key="index" :card="card" />
       </div>
@@ -35,11 +35,12 @@
       </div>
       <div>
         <label>游戏风格: </label>
-        <select v-model="player.style">
+        <select v-model="player.style" @change="updatePlayerStyle">
           <option value="tight">紧</option>
           <option value="loose">松</option>
           <option value="aggressive">激进</option>
           <option value="conservative">保守</option>
+          <option value="checkCall">call</option>
         </select>
       </div>
     </div>
@@ -51,12 +52,12 @@
   color: white;
   font-weight: bold;
   margin-bottom: 5px;
-  text-align: center;
+  text-align: left;
 }
 
 .cards {
   display: flex;
-  justify-content: center;
+  justify-content: left;
   gap: 5px;
   margin-top: 5px;
 }
@@ -113,13 +114,13 @@
 }
 
 .player:not(.active) {
-  opacity: 0.3;
+  opacity: 0.01;
   transition: opacity 0.3s ease;
 }
 
 .best-hand {
   margin-top: 5px;
-  text-align: center;
+  text-align: left;
 }
 
 .best-hand-label {
@@ -164,33 +165,14 @@
 <script lang="ts">
 import { defineComponent } from 'vue'
 import Card from './Card.vue'
-import type { Card as CardType } from '../services/types'
+import type { Card as CardType, Player as PlayerType } from '../services/types'
+import { getHandName } from '../services/evaluation'
 
 export default defineComponent({
   components: { Card },
   props: {
     player: {
-      type: Object as () => {
-        id: number
-        name: string
-        chips: number
-        hand: CardType[]
-        isDealer: boolean
-        isActive: boolean
-        currentBet: number
-        isAllIn: boolean
-        lastAction: string
-        isWinner?: boolean
-        winAmount?: number
-        handValue?: {
-          handType: number
-          handRank: number
-          value: number
-          cards: CardType[]
-        }
-        isUser?: boolean // 新增字段
-        style: string
-      },
+      type: Object as () => PlayerType,
       required: true
     },
     isShowdown: {
@@ -215,12 +197,31 @@ export default defineComponent({
         'bigblind': '大盲'
       }
       return actionMap[action] || '未行动'
+    },
+    getStyleName(style: string) {
+      const styleMap: Record<string, string> = {
+        'tight': '紧',
+        'loose': '松',
+        'aggressive': '激进',
+        'conservative': '保守',
+        'checkCall': '跟注'
+      }
+      return styleMap[style] || style
+    },
+    updatePlayerStyle() {
+      this.$store.commit('UPDATE_PLAYER_STYLE', {
+        playerId: this.player.id,
+        style: this.player.style
+      });
     }
   },
   computed: {
     visibleCards() {
       // 在showdown阶段或当前玩家是用户时显示手牌
       return this.isShowdown || this.player.isUser ? this.player.hand || [] : []
+    },
+    handName() {
+      return getHandName(this.player.handValue?.handType)
     }
   }
 })

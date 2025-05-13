@@ -1,7 +1,8 @@
 import { createStore } from 'vuex'
 import { Player, GameState, STAGES, PlayerAction } from '../services/types'
-import { createGameState, createDeck, shuffleDeck, addLog } from '../services/poker'
+import { createGameState, createDeck, shuffleDeck, addLog, setPlayerCount } from '../services/poker'
 import { evaluateHand } from '../services/evaluation'
+import { generateAction } from '../services/bot'
 
 export default createStore<GameState>({
     state: createGameState(),
@@ -16,24 +17,7 @@ export default createStore<GameState>({
             state.table.dealerPosition = 0
         },
         SET_PLAYER_COUNT(state, count: number) {
-            const player_order = [1, 7, 3, 9, 5, 11, 4, 10, 2, 8, 6, 12]
-            player_order.forEach((playerId, index) => {
-                const player = state.players.find(p => p.id === playerId)
-                if (!player) {
-                    console.error(`Player with id ${playerId} not found`)
-                    throw new Error(`Player with id ${playerId} not found`)
-                    return
-                }
-                if (index < count) {
-                    player.isActive = true
-                    player.chips = 1000
-                    player.buyin = 1000
-                } else {
-                    player.isActive = false
-                    player.chips = 0
-                    player.buyin = 0
-                }
-            })
+            setPlayerCount(state, count)
         },
         SET_GAME_MODE(state, mode: string) {
             state.players[0].isUser = mode === 'manual'
@@ -60,6 +44,12 @@ export default createStore<GameState>({
                 throw new Error(`Player with id ${playerId} not found`)
             }
         },
+        UPDATE_PLAYER_STYLE(state, { playerId, style }) {
+            const player = state.players.find(p => p.id === playerId);
+            if (player) {
+                player.style = style;
+            }
+        },
         // ------- 游戏流程方法 --------
         // 准备下一局游戏
         NEXT_ROUND(state) {
@@ -83,16 +73,18 @@ export default createStore<GameState>({
             state.table.currentPlayer = state.table.dealerPosition
             // 重置玩家手牌和状态
             state.players.forEach(player => {
-                player.isDealer = player.id === state.table.dealerPosition
-                player.hand = []
-                player.currentBet = 0
-                player.isAllIn = false
-                player.lastAction = ''
-                player.isWinner = false
-                player.winAmount = 0
-                player.handValue = undefined
-                if (player.isActive && player.chips <= 0) {
-                    player.isActive = false
+                if (player.isActive) {
+                    player.isDealer = player.id === state.table.dealerPosition
+                    player.hand = []
+                    player.currentBet = 0
+                    player.isAllIn = false
+                    player.lastAction = ''
+                    player.isWinner = false
+                    player.winAmount = 0
+                    player.handValue = undefined
+                    if (player.chips <= 0) {
+                        player.isActive = false
+                    }
                 }
             })
             addLog(state, '重置牌桌状态, 开始下一局游戏')
@@ -127,7 +119,7 @@ export default createStore<GameState>({
                 state.table.currentBet = 0
                 state.table.currentPlayer = state.table.dealerPosition
                 state.players.forEach(player => {
-                    if (player.isActive) {
+                    if (player.isActive && player.lastAction !== 'fold') {
                         player.currentBet = 0
                         player.lastAction = ''
                     }
@@ -214,8 +206,11 @@ export default createStore<GameState>({
             player.chips -= amount
             player.lastAction = action
             state.table.pot += amount
-            state.table.currentBet = Math.max(state.table.currentBet, player.currentBet)
-            addLog(state, `Player ${playerId} ${action} ${amount} chips`)
+            if (state.table.currentBet < player.currentBet) {
+                state.table.currentBet = player.currentBet
+                state.table.raiseCount++
+            }
+            addLog(state, `Player ${playerId} ${player.style} ${action} ${amount} chips`)
         },
         RESET_PLAYER_BUYINS(state, minBuyin: number) {
             state.table.minBuyin = minBuyin
@@ -254,7 +249,11 @@ export default createStore<GameState>({
                 if (isEnd) {
                     commit('NEXT_STAGE')
                     const activePlayers = state.players.filter(p => p.isActive && p.lastAction !== 'fold')
-                    if (state.table.gameStage === 'showdown' || activePlayers.length === 1) {
+                    if (activePlayers.length <= 1) {
+                        // 只有一个玩家或者没有玩家, 直接进入showdown阶段
+                        commit('SET_GAME_STAGE', 'showdown')
+                    }
+                    if (state.table.gameStage === 'showdown') {
                         // 游戏结束, 结算筹码，退出
                         await dispatch('settleChips')
                         commit('ADD_LOG', '本局游戏结束')
@@ -281,7 +280,7 @@ export default createStore<GameState>({
             if (!currentPlayer || !currentPlayer.isActive || currentPlayer.lastAction === 'fold') {
                 return { isEnd: false, reason: "非活跃玩家" }
             }
-            const activePlayers = state.players.filter(p => p.isActive && p.lastAction!== 'fold')
+            const activePlayers = state.players.filter(p => p.isActive && p.lastAction !== 'fold')
             if (activePlayers.length === 1) {
                 return { isEnd: true, reason: "唯一活跃玩家" }
             }
@@ -300,7 +299,7 @@ export default createStore<GameState>({
         settleChips({ state, commit }) {
             // 计算边池
             state.table.sidePots = []
-            const activePlayers = state.players.filter(p => p.isActive && p.lastAction!== 'fold')
+            const activePlayers = state.players.filter(p => p.isActive && p.lastAction !== 'fold')
             if (activePlayers.length === 0) {
                 commit('ADD_LOG', '没有活跃玩家，本局游戏结束')
                 throw new Error('没有活跃玩家，本局游戏结束')
@@ -370,9 +369,11 @@ export default createStore<GameState>({
             })
         },
         // bot玩家行动
-        async botPlayerAction({ state, dispatch }) {
-            const action = { type: 'checkCall', amount: 0 } as PlayerAction
-            await dispatch('playerAction', action)
+        async botPlayerAction({ commit, state, dispatch }) {
+            const player = state.players.find(p => p.id === state.table.currentPlayer)
+            const action = generateAction(player, state.table)
+            // commit('ADD_LOG', `Player ${player.id} ${player.style} ${action.type} ${action.amount} chips`)
+            await dispatch('playerAction', {action: action, playerId: player.id})
         },
         // 玩家行动
         async playerAction({ state, commit }, { playerId = state.table.currentPlayer, action = { type: 'checkCall', amount: 0 } as PlayerAction }) {

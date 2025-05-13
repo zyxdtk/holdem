@@ -25,6 +25,7 @@ export interface TableState {
     pot: number
     sidePots: SidePot[]
     currentBet: number
+    raiseCount: number // 记录玩家第几次加注
     // 牌相关字段
     deck: Card[]
     communityCards: Card[]
@@ -54,12 +55,7 @@ export interface Player {
     // 新增字段
     isWinner: boolean // 本局是否赢了
     winAmount: number // 赢了多少筹码
-    handValue?: {     // 牌型评估结果
-        handType: number
-        handRank: number
-        value: number
-        cards: Card[]
-    },
+    handValue?: EvaluatedHand, // 手牌的评估值
     style: 'checkCall' | 'tight' | 'loose' | 'aggressive' | 'conservative' // 玩家风格
 }
 
@@ -77,15 +73,6 @@ export interface PlayerAction  {
     type: 'fold' | 'checkCall' | 'raise' | 'allin' | 'check' | 'call' | 'bet'
     amount: number
 }
-
-export interface PlayerState  {
-    hand: Card[]
-    chips: number
-    currentBet: number
-    style: 'tight' | 'loose' | 'aggressive' | 'conservative'
-}
-
-
 
 export interface OpponentState  {
     style: 'tight' | 'loose' | 'aggressive' | 'conservative'
